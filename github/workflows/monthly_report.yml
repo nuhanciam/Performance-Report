@@ -1,0 +1,65 @@
+name: Rapport mensuel Shopify
+
+on:
+  # Tourne le 1er de chaque mois à 7h00 (heure Paris = UTC+1/+2)
+  schedule:
+    - cron: "0 6 1 * *"   # 6h UTC = 7h Paris hiver / 8h Paris été
+
+  # Permet de lancer manuellement depuis l'onglet Actions de GitHub
+  workflow_dispatch:
+    inputs:
+      report_months:
+        description: "Nombre de mois à couvrir (1 = mois précédent uniquement)"
+        required: false
+        default: "1"
+
+jobs:
+  generate-and-send-report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout du dépôt
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Installation des dépendances
+        run: |
+          pip install --upgrade pip
+          pip install \
+            requests \
+            pandas \
+            openpyxl \
+            pytz
+
+          # GA4 — installé seulement si la variable est renseignée
+          if [ -n "$GA4_PROPERTY_ID" ]; then
+            pip install google-analytics-data google-auth
+          fi
+        env:
+          GA4_PROPERTY_ID: ${{ secrets.GA4_PROPERTY_ID }}
+
+      - name: Génération et envoi du rapport
+        run: python run_monthly.py
+        env:
+          # Shopify
+          SHOPIFY_DOMAIN: ${{ secrets.SHOPIFY_DOMAIN }}
+          SHOPIFY_TOKEN:  ${{ secrets.SHOPIFY_TOKEN }}
+
+          # GA4 (optionnel — laisser vide si non utilisé)
+          GA4_PROPERTY_ID:   ${{ secrets.GA4_PROPERTY_ID }}
+          GA4_SERVICE_JSON:  ${{ secrets.GA4_SERVICE_JSON }}
+
+          # Mail
+          MAIL_FROM:     ${{ secrets.MAIL_FROM }}
+          MAIL_PASSWORD: ${{ secrets.MAIL_PASSWORD }}
+          MAIL_TO:       ${{ secrets.MAIL_TO }}
+
+          # Optionnel
+          REPORT_MONTHS: ${{ github.event.inputs.report_months || '1' }}
+          SMTP_HOST: smtp.gmail.com
+          SMTP_PORT: "587"
