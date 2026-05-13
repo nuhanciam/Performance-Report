@@ -526,7 +526,7 @@ def make_months_as_columns(df):
     return pd.DataFrame(rows)
 
 
-def build_comparison_excel_from_json(comparison_json_data):
+def build_excel(comparison_json_data):
     """
     Génère l'Excel de comparaison à partir du dictionnaire JSON.
     comparison_json_data: dict (résultat de json.loads ou build_comparison_json)
