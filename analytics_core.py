@@ -17,6 +17,37 @@ REQUEST_DELAY_SECONDS = 0.60
 MAX_RETRIES = 6
 
 
+GA4_SOURCE_CHANNELS = [
+    ("Organic Search", "src_Organic_Search"),
+    ("Organic Social", "src_Organic_Social"),
+    ("Organic Shopping", "src_Organic_Shopping"),
+    ("Organic Video", "src_Organic_Video"),
+    ("Direct", "src_Direct"),
+    ("Paid Search", "src_Paid_Search"),
+    ("Paid Social", "src_Paid_Social"),
+    ("Paid Shopping", "src_Paid_Shopping"),
+    ("Paid Video", "src_Paid_Video"),
+    ("Paid Other", "src_Paid_Other"),
+    ("Cross-network", "src_Cross_Network"),
+    ("Display", "src_Display"),
+    ("Email", "src_Email"),
+    ("SMS", "src_SMS"),
+    ("Mobile Push", "src_Mobile_Push_Notifications"),
+    ("Referral", "src_Referral"),
+    ("Affiliates", "src_Affiliates"),
+    ("Audio", "src_Audio"),
+    ("Unassigned", "src_Unassigned"),
+]
+
+GA4_SOURCE_TOTAL_CHANNELS = [
+    ("Organic (total)", "src_Organic"),
+    ("Paid (total)", "src_Paid"),
+    ("Social (total)", "src_Social"),
+]
+
+GA4_SOURCE_COLUMN_KEYS = [source_key for _, source_key in GA4_SOURCE_CHANNELS]
+
+
 REPORT_ROWS = [
     ("Sessions", "sessions"),
     ("Visteurs uniques", "unique_visitors"),
@@ -24,6 +55,10 @@ REPORT_ROWS = [
     ("Duration (s)", "duration_seconds"),
     ("Duration (min)", "duration_minutes"),
     ("Bounce %", "bounce_pct"),
+    ("", None),
+    ("SOURCES ACQUISITION", None),
+    *GA4_SOURCE_TOTAL_CHANNELS,
+    *GA4_SOURCE_CHANNELS,
     ("", None),
     ("Add to cart", "add_to_cart"),
     ("Checkout", "checkout"),
@@ -255,16 +290,28 @@ def get_ga4_monthly_metrics(property_id, service_account_info_dict, date_from, d
 
     # Mapping GA4 channel → nos libellés
     CHANNEL_MAP = {
-        "organic search":   "Organic",
-        "direct":           "Direct",
-        "paid search":      "Paid",
-        "paid social":      "Paid",
-        "email":            "Email",
-        "organic social":   "Social",
-        "referral":         "Referral",
-        "unassigned":       "Unassigned",
+        "organic search":              "Organic_Search",
+        "organic social":              "Organic_Social",
+        "organic shopping":            "Organic_Shopping",
+        "organic video":               "Organic_Video",
+        "direct":                      "Direct",
+        "paid search":                 "Paid_Search",
+        "paid social":                 "Paid_Social",
+        "paid shopping":               "Paid_Shopping",
+        "paid video":                  "Paid_Video",
+        "paid other":                  "Paid_Other",
+        "cross-network":               "Cross_Network",
+        "cross network":               "Cross_Network",
+        "display":                     "Display",
+        "email":                       "Email",
+        "sms":                         "SMS",
+        "mobile push notifications":   "Mobile_Push_Notifications",
+        "referral":                    "Referral",
+        "affiliates":                  "Affiliates",
+        "audio":                       "Audio",
+        "unassigned":                  "Unassigned",
     }
-    OUR_CHANNELS = ["Organic", "Direct", "Paid", "Email", "Social", "Referral", "Unassigned"]
+    OUR_CHANNELS = [source_key.replace("src_", "") for source_key in GA4_SOURCE_COLUMN_KEYS]
 
     # Agrégation des sessions par canal
     channel_by_month = defaultdict(lambda: defaultdict(int))
@@ -298,6 +345,22 @@ def get_ga4_monthly_metrics(property_id, service_account_info_dict, date_from, d
         }
         for c in OUR_CHANNELS:
             entry[f"src_{c}"] = ch.get(c, 0)
+        entry["src_Organic"] = sum(
+            entry.get(key, 0)
+            for key in [
+                "src_Organic_Search", "src_Organic_Social",
+                "src_Organic_Shopping", "src_Organic_Video",
+            ]
+        )
+        entry["src_Paid"] = sum(
+            entry.get(key, 0)
+            for key in [
+                "src_Paid_Search", "src_Paid_Social", "src_Paid_Shopping",
+                "src_Paid_Video", "src_Paid_Other", "src_Cross_Network",
+                "src_Display",
+            ]
+        )
+        entry["src_Social"] = entry.get("src_Organic_Social", 0) + entry.get("src_Paid_Social", 0)
         rows.append(entry)
 
     return pd.DataFrame(rows)
@@ -489,8 +552,8 @@ def compute_monthly_metrics(orders, ga4_df=None, date_from=None, date_to=None):
             "sessions", "unique_visitors", "sessions_per_visitor",
             "duration_seconds", "duration_minutes", "bounce_pct",
             "add_to_cart", "checkout",
-            "src_Organic", "src_Direct", "src_Paid",
-            "src_Email", "src_Social", "src_Referral", "src_Unassigned",
+            *GA4_SOURCE_COLUMN_KEYS,
+            "src_Organic", "src_Paid", "src_Social",
         ]
         for col in ga4_columns:
             ga4_col = f"{col}_ga4"
@@ -565,8 +628,10 @@ def build_excel(df):
         "Sessions", "Visteurs uniques", "Add to cart", "Checkout",
         "COMMANDES", "Commandes Nx clients", "# Clients uniques",
         "# Nx clients", "# Clients récurrents", "# Produits vendus", "Retours #",
+        *(label for label, _ in GA4_SOURCE_TOTAL_CHANNELS),
+        *(label for label, _ in GA4_SOURCE_CHANNELS),
     }
-    section_labels = {"TOP 3 EXPORT", "TOP 5 PDCT"}
+    section_labels = {"SOURCES ACQUISITION", "TOP 3 EXPORT", "TOP 5 PDCT"}
 
     headers = list(display_df.columns)
 
@@ -635,12 +700,27 @@ COMPARISON_ROWS = [
     ("#1 ACQUISITION", None, None, None, None),
     (None, "Visiteurs uniques",       None,         "unique_visitors",             "count"),
     (None, "Nouveaux visiteurs",      None,         None,                          None),
-    (None, "Sources acquisition",     "Organic",    "src_Organic",                 "count"),
+    (None, "Sources acquisition",     "Organic (total)", "src_Organic",            "count"),
+    (None, "",                        "Paid (total)", "src_Paid",                  "count"),
+    (None, "",                        "Social (total)", "src_Social",              "count"),
+    (None, "",                        "Organic Search", "src_Organic_Search",      "count"),
+    (None, "",                        "Organic Social", "src_Organic_Social",      "count"),
+    (None, "",                        "Organic Shopping", "src_Organic_Shopping",  "count"),
+    (None, "",                        "Organic Video", "src_Organic_Video",        "count"),
     (None, "",                        "Direct",     "src_Direct",                  "count"),
-    (None, "",                        "Paid",       "src_Paid",                    "count"),
+    (None, "",                        "Paid Search", "src_Paid_Search",            "count"),
+    (None, "",                        "Paid Social", "src_Paid_Social",            "count"),
+    (None, "",                        "Paid Shopping", "src_Paid_Shopping",        "count"),
+    (None, "",                        "Paid Video", "src_Paid_Video",              "count"),
+    (None, "",                        "Paid Other", "src_Paid_Other",              "count"),
+    (None, "",                        "Cross-network", "src_Cross_Network",        "count"),
+    (None, "",                        "Display",    "src_Display",                 "count"),
     (None, "",                        "Email",      "src_Email",                   "count"),
-    (None, "",                        "Social",     "src_Social",                  "count"),
+    (None, "",                        "SMS",        "src_SMS",                     "count"),
+    (None, "",                        "Mobile Push", "src_Mobile_Push_Notifications", "count"),
     (None, "",                        "Referral",   "src_Referral",                "count"),
+    (None, "",                        "Affiliates", "src_Affiliates",              "count"),
+    (None, "",                        "Audio",      "src_Audio",                   "count"),
     (None, "",                        "Unassigned", "src_Unassigned",              "count"),
     (None, "Duration min",            None,         "duration_minutes",            "ratio"),
     (None, "Bounce %",                None,         "bounce_pct",                  "pct"),
