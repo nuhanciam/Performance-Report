@@ -6,8 +6,8 @@ Fonctionnement :
   - Charge l'Excel cumulatif existant dans le dépôt (data/rapport_cumul.json)
   - Fusionne les nouvelles données avec l'historique
   - Régénère l'Excel complet (toutes les colonnes depuis le début)
-  - Sauvegarde le JSON mis à jour dans le dépôt (commité par le workflow)
-  - Envoie le mail avec l'Excel en pièce jointe
+  - Sauvegarde les JSON mis à jour dans le dépôt (commités par le workflow)
+  - Envoie le mail avec les deux Excel en pièces jointes
 
 Variables d'environnement requises :
   SHOPIFY_DOMAIN       ex: nuhanciam.myshopify.com
@@ -23,6 +23,7 @@ Variables d'environnement requises :
 """
 
 import json
+import builtins
 import os
 import smtplib
 import sys
@@ -42,8 +43,23 @@ from analytics_core import (
     get_ga4_monthly_metrics,
 )
 
-# Fichier JSON qui stocke l'historique dans le dépôt
+
+def safe_print(*args, **kwargs):
+    """Print safely when a local console cannot encode every character."""
+    stream = kwargs.get("file") or sys.stdout
+    encoding = getattr(stream, "encoding", None) or "utf-8"
+    safe_args = [
+        str(arg).encode(encoding, errors="replace").decode(encoding, errors="replace")
+        for arg in args
+    ]
+    builtins.print(*safe_args, **kwargs)
+
+
+print = safe_print
+
+# Fichiers JSON qui stockent les historiques dans le dépôt
 CUMUL_PATH = Path("data/rapport_cumul.json")
+COMPARISON_PATH = Path("data/rapport_comparaison.json")
 
 
 def resolve_period():
@@ -60,28 +76,58 @@ def resolve_period():
     return date_from, date_to
 
 
-def load_cumul() -> pd.DataFrame:
-    """Charge l'historique cumulatif depuis le JSON du dépôt."""
-    if not CUMUL_PATH.exists():
-        print("ℹ️  Pas d'historique existant — premier run.")
+def load_history(path: Path, label: str) -> pd.DataFrame:
+    """Charge un historique depuis un JSON du dépôt."""
+    if not path.exists():
+        print(f"ℹ️  Pas d'historique {label} existant ({path}) — premier run.")
         return pd.DataFrame()
     try:
-        with open(CUMUL_PATH, "r", encoding="utf-8") as f:
+        with open(path, "r", encoding="utf-8") as f:
             records = json.load(f)
         df = pd.DataFrame(records)
-        print(f"📂 Historique chargé : {len(df)} mois existants ({', '.join(df['Mois'].tolist())})")
+
+        if df.empty:
+            print(f"📂 Historique {label} chargé : 0 mois existant")
+            return df
+
+        if "Mois" not in df.columns:
+            raise ValueError("colonne 'Mois' manquante")
+
+        df = df.sort_values("Mois").reset_index(drop=True)
+        print(f"📂 Historique {label} chargé : {len(df)} mois existants ({', '.join(df['Mois'].tolist())})")
         return df
     except Exception as e:
-        print(f"⚠️  Erreur lecture historique : {e} — repart de zéro.")
+        print(f"⚠️  Erreur lecture historique {label} : {e} — repart de zéro.")
         return pd.DataFrame()
+
+
+def save_history(path: Path, df: pd.DataFrame, label: str):
+    """Sauvegarde un DataFrame historique en JSON dans le dépôt."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df_to_save = df.sort_values("Mois").reset_index(drop=True) if "Mois" in df.columns else df
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(df_to_save.to_dict(orient="records"), f, ensure_ascii=False, default=str)
+    print(f"💾 Historique {label} sauvegardé : {len(df_to_save)} mois au total ({path})")
+
+
+def load_cumul() -> pd.DataFrame:
+    """Charge l'historique cumulatif depuis le JSON du dépôt."""
+    return load_history(CUMUL_PATH, "cumulatif")
 
 
 def save_cumul(df: pd.DataFrame):
-    """Sauvegarde le DataFrame cumulatif en JSON dans le dépôt."""
-    CUMUL_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with open(CUMUL_PATH, "w", encoding="utf-8") as f:
-        json.dump(df.to_dict(orient="records"), f, ensure_ascii=False, default=str)
-    print(f"💾 Historique sauvegardé : {len(df)} mois au total")
+    """Sauvegarde l'historique cumulatif en JSON dans le dépôt."""
+    save_history(CUMUL_PATH, df, "cumulatif")
+
+
+def load_comparison_source() -> pd.DataFrame:
+    """Charge l'historique utilisé pour générer l'Excel de comparaison."""
+    return load_history(COMPARISON_PATH, "comparaison")
+
+
+def save_comparison_source(df: pd.DataFrame):
+    """Sauvegarde le JSON source dédié à l'Excel de comparaison."""
+    save_history(COMPARISON_PATH, df, "comparaison")
 
 
 def merge_cumul(existing: pd.DataFrame, new: pd.DataFrame) -> pd.DataFrame:
@@ -225,17 +271,24 @@ def main():
 
     # --- Sauvegarde historique ---
     save_cumul(full_df)
+    save_comparison_source(full_df)
 
     # --- Génération Excel cumulatif ---
     print(f"📄 Génération de l'Excel cumulatif ({len(full_df)} mois)...")
     excel_cumul_bytes = build_excel(full_df)
     filename_cumul = "analytics_nuhanciam_cumul.xlsx"
 
+    # --- Génération Excel comparaison depuis son JSON dédié ---
+    comparison_df = load_comparison_source()
+    if comparison_df.empty:
+        print("⚠️  JSON de comparaison vide après sauvegarde — fallback sur le cumulatif en mémoire.")
+        comparison_df = full_df
+
     # --- Génération Excel comparaison (Mois M vs même mois année précédente) ---
     month_m = sorted(new_df["Mois"].tolist())[-1]  # dernier mois du run
     print(f"📊 Génération de l'Excel comparaison pour {month_m}...")
     try:
-        excel_comp_bytes = build_excel_comparison(full_df, month_m)
+        excel_comp_bytes = build_excel_comparison(comparison_df, month_m)
         filename_comp = f"analytics_nuhanciam_comparaison_{month_m}.xlsx"
     except Exception as e:
         print(f"⚠️  Erreur génération comparaison : {e} — seul le cumulatif sera envoyé.")

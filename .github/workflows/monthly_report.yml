@@ -68,11 +68,11 @@ jobs:
           SMTP_HOST: smtp.gmail.com
           SMTP_PORT: "587"
 
-      - name: Commit de l'historique cumulatif
+      - name: Commit des historiques JSON
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/rapport_cumul.json
+          git add data/rapport_cumul.json data/rapport_comparaison.json
           # Ne commite que s'il y a vraiment un changement
-          git diff --cached --quiet || git commit -m "chore: mise à jour historique $(date +'%Y-%m')"
+          git diff --cached --quiet || git commit -m "chore: mise à jour historiques $(date +'%Y-%m')"
           git push
