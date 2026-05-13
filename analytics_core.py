@@ -118,6 +118,18 @@ REPORT_ROWS = [
     ("#3", "Top Pdct #3"),
     ("#4", "Top Pdct #4"),
     ("#5", "Top Pdct #5"),
+    ("", None),
+    ("TOP 10 PRODUITS VOLUME", None),
+    ("#1", "Top Volume #1"),
+    ("#2", "Top Volume #2"),
+    ("#3", "Top Volume #3"),
+    ("#4", "Top Volume #4"),
+    ("#5", "Top Volume #5"),
+    ("#6", "Top Volume #6"),
+    ("#7", "Top Volume #7"),
+    ("#8", "Top Volume #8"),
+    ("#9", "Top Volume #9"),
+    ("#10", "Top Volume #10"),
 ]
 
 
@@ -463,6 +475,11 @@ def compute_monthly_metrics(orders, ga4_df=None, date_from=None, date_to=None):
                 product_qty[product_id]["revenue"] += price * quantity
 
         top5 = sorted(product_qty.values(), key=lambda x: x["revenue"], reverse=True)[:5]
+        top10_volume = sorted(
+            product_qty.values(),
+            key=lambda x: (x["qty"], x["revenue"]),
+            reverse=True,
+        )[:10]
 
         ratio_cde_client = round(nb_orders / nb_customers, 2) if nb_customers else 0
         ratio_pdct_cde = round(products_sold / nb_orders, 2) if nb_orders else 0
@@ -527,6 +544,13 @@ def compute_monthly_metrics(orders, ga4_df=None, date_from=None, date_to=None):
             "Top Pdct #4 CA (€)": round(top5[3]["revenue"], 2) if len(top5) > 3 else 0,
             "Top Pdct #5": top5[4]["title"] if len(top5) > 4 else "",
             "Top Pdct #5 CA (€)": round(top5[4]["revenue"], 2) if len(top5) > 4 else 0,
+            **{
+                f"Top Volume #{i}": (
+                    f'{top10_volume[i - 1]["title"]} - {top10_volume[i - 1]["qty"]} u'
+                    if len(top10_volume) >= i else ""
+                )
+                for i in range(1, 11)
+            },
         })
 
     df = pd.DataFrame(rows)
@@ -631,7 +655,10 @@ def build_excel(df):
         *(label for label, _ in GA4_SOURCE_TOTAL_CHANNELS),
         *(label for label, _ in GA4_SOURCE_CHANNELS),
     }
-    section_labels = {"SOURCES ACQUISITION", "TOP 3 EXPORT", "TOP 5 PDCT"}
+    section_labels = {
+        "SOURCES ACQUISITION", "TOP 3 EXPORT", "TOP 5 PDCT",
+        "TOP 10 PRODUITS VOLUME",
+    }
 
     headers = list(display_df.columns)
 
@@ -762,7 +789,16 @@ COMPARISON_ROWS = [
     (None, "Ratio cdes/clients",      None,         "Ratio cdes/clients",          "ratio"),
     (None, "Ratio produit / cde",     None,         "Ratio produit/cde",           "ratio"),
     ("_BLANK_", None, None, None, None),
-    (None, "Top 10 produits Volume",  None,         None,                          None),
+    (None, "Top 10 produits Volume",  "#1",         "Top Volume #1",               "text"),
+    (None, "",                        "#2",         "Top Volume #2",               "text"),
+    (None, "",                        "#3",         "Top Volume #3",               "text"),
+    (None, "",                        "#4",         "Top Volume #4",               "text"),
+    (None, "",                        "#5",         "Top Volume #5",               "text"),
+    (None, "",                        "#6",         "Top Volume #6",               "text"),
+    (None, "",                        "#7",         "Top Volume #7",               "text"),
+    (None, "",                        "#8",         "Top Volume #8",               "text"),
+    (None, "",                        "#9",         "Top Volume #9",               "text"),
+    (None, "",                        "#10",        "Top Volume #10",              "text"),
     ("_BLANK_", None, None, None, None),
 
     ("#5 GEO", None, None, None, None),
@@ -1017,7 +1053,11 @@ def build_excel_comparison(full_df: "pd.DataFrame", month_m: str, months_to_comp
             c = ws.cell(row=excel_row, column=base_col, value=val_m)
             c.border    = b_norm
             c.font      = f_italic if is_subcategory else f_normal
-            c.alignment = Alignment(horizontal="right", vertical="center")
+            c.alignment = Alignment(
+                horizontal="left" if val_type == "text" else "right",
+                vertical="center",
+                wrap_text=val_type == "text",
+            )
             if fill_row: c.fill = fill_row
             _apply_num_fmt(c, val_type, is_roas, is_input, euro_fmt, pct_fmt, ratio_fmt, count_fmt)
 
@@ -1025,7 +1065,11 @@ def build_excel_comparison(full_df: "pd.DataFrame", month_m: str, months_to_comp
             c = ws.cell(row=excel_row, column=base_col + 1, value=val_m1)
             c.border    = b_norm
             c.font      = f_italic if is_subcategory else f_normal
-            c.alignment = Alignment(horizontal="right", vertical="center")
+            c.alignment = Alignment(
+                horizontal="left" if val_type == "text" else "right",
+                vertical="center",
+                wrap_text=val_type == "text",
+            )
             if fill_row: c.fill = fill_row
             _apply_num_fmt(c, val_type, is_roas, is_input, euro_fmt, pct_fmt, ratio_fmt, count_fmt)
 
@@ -1042,6 +1086,9 @@ def build_excel_comparison(full_df: "pd.DataFrame", month_m: str, months_to_comp
 
             # Colonne vide séparatrice
             ws.cell(row=excel_row, column=base_col + 3, value="")
+
+        if val_type == "text":
+            ws.row_dimensions[excel_row].height = 30
 
         excel_row += 1
         stripe = not stripe
