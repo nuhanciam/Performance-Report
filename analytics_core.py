@@ -526,98 +526,89 @@ def make_months_as_columns(df):
     return pd.DataFrame(rows)
 
 
-def build_excel(df):
-    display_df = make_months_as_columns(df)
-
+def build_comparison_excel_from_json(comparison_json_data):
+    """
+    Génère l'Excel de comparaison à partir du dictionnaire JSON.
+    comparison_json_data: dict (résultat de json.loads ou build_comparison_json)
+    """
     wb = Workbook()
     ws = wb.active
-    ws.title = "Vue mensuelle"
+    
+    # Récupération des métadonnées pour le titre
+    current_m = comparison_json_data.get("metadata", {}).get("current_month", "M")
+    prev_m = comparison_json_data.get("metadata", {}).get("comparison_month", "M-1 an")
+    ws.title = f"Comparaison {current_m}"
 
+    # --- Configuration des Styles (Identique à build_excel) ---
     header_font = Font(name="Arial", bold=True, color="FFFFFF", size=10)
     normal_font = Font(name="Arial", size=10)
     bold_font = Font(name="Arial", bold=True, size=10)
     header_fill = PatternFill("solid", fgColor="1F4E79")
-    section_fill = PatternFill("solid", fgColor="D9E1F2")
     stripe_fill = PatternFill("solid", fgColor="F2F2F2")
     thin = Side(style="thin", color="CCCCCC")
     border = Border(left=thin, right=thin, top=thin, bottom=thin)
 
+    # Formats (Identique à build_excel)
     euro_fmt = '#,##0.00 "€"'
     pct_fmt = '0.0"%"'
     num_fmt = '#,##0'
     ratio_fmt = '0.00'
 
-    euro_labels = {
-        "Gross sales", "Discounts", "Net Sales", "Shipping", "Taxes",
-        "TOTAL SALES", "AOV HT", "AOV TTC (incl ship)", "CA / client HT",
-        "CA / client TTC (incl ship)", "CA Nx clients HT", "LTV estimée",
-        "Retours €", "NET SALES", "FRANCE", "EXPORT",
-    }
-    pct_labels = {
-        "Bounce %", "Conversion %", "% cdes Nx clients", "Discounts %",
-        "POIDS %", "% CA Nvx clients", "Retours %",
-    }
-    ratio_labels = {
-        "Sessions / visitor", "Ratio cdes/clients", "Ratio produit / cde",
-        "Ratio produit / client", "Frequence achat",
-    }
-    count_labels = {
-        "Sessions", "Visteurs uniques", "Add to cart", "Checkout",
-        "COMMANDES", "Commandes Nx clients", "# Clients uniques",
-        "# Nx clients", "# Clients récurrents", "# Produits vendus", "Retours #",
-    }
-    section_labels = {"TOP 3 EXPORT", "TOP 5 PDCT"}
-
-    headers = list(display_df.columns)
-
+    # --- En-têtes ---
+    headers = ["Indicateur", current_m, prev_m, "Variation %"]
     for col_idx, header in enumerate(headers, start=1):
         cell = ws.cell(row=1, column=col_idx, value=header)
         cell.font = header_font
         cell.fill = header_fill
-        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        cell.alignment = Alignment(horizontal="center", vertical="center")
         cell.border = border
 
-    for row_idx, row in display_df.iterrows():
-        excel_row = row_idx + 2
-        label = row["Indicateur"]
+    # --- Remplissage des lignes ---
+    metrics = comparison_json_data.get("metrics", {})
+    
+    for row_idx, (label, values) in enumerate(metrics.items(), start=2):
+        # Colonne A : Libellé
+        cell_label = ws.cell(row=row_idx, column=1, value=label)
+        cell_label.font = bold_font
+        cell_label.border = border
+        
+        # Colonne B : Valeur Mois M
+        cell_m = ws.cell(row=row_idx, column=2, value=values.get("val_m"))
+        
+        # Colonne C : Valeur Mois M-12
+        cell_m1 = ws.cell(row=row_idx, column=3, value=values.get("val_m1"))
+        
+        # Colonne D : Variation %
+        cell_var = ws.cell(row=row_idx, column=4, value=values.get("variation_pct"))
+        
+        # Style de ligne (zébrures)
+        if row_idx % 2 == 0:
+            for c in range(1, 5):
+                ws.cell(row=row_idx, column=c).fill = stripe_fill
 
-        for col_idx, header in enumerate(headers, start=1):
-            value = row[header]
-            cell = ws.cell(row=excel_row, column=col_idx, value=value)
-
-            if label == "":
-                cell.border = Border()
-                continue
-
+        # Application des formats numériques basés sur l'unité stockée dans le JSON
+        unit = values.get("unit")
+        for cell in [cell_m, cell_m1]:
             cell.border = border
-            cell.alignment = Alignment(
-                horizontal="left" if col_idx == 1 else "right", vertical="center"
-            )
+            if unit == "euro": cell.number_format = euro_fmt
+            elif unit == "pct": cell.number_format = pct_fmt
+            elif unit == "ratio": cell.number_format = ratio_fmt
+            elif unit == "count": cell.number_format = num_fmt
 
-            if label in section_labels:
-                cell.fill = section_fill
-                cell.font = Font(name="Arial", bold=True, color="1F4E79", size=11)
-                continue
+        # Format spécifique pour la colonne Variation
+        cell_var.border = border
+        cell_var.number_format = pct_fmt
+        if cell_var.value is not None:
+            if cell_var.value > 0:
+                cell_var.font = Font(name="Arial", color="217346", bold=True) # Vert
+            elif cell_var.value < 0:
+                cell_var.font = Font(name="Arial", color="C00000", bold=True) # Rouge
 
-            cell.font = bold_font if col_idx == 1 else normal_font
-
-            if row_idx % 2 == 0:
-                cell.fill = stripe_fill
-
-            if col_idx > 1:
-                if label in euro_labels:
-                    cell.number_format = euro_fmt
-                elif label in pct_labels:
-                    cell.number_format = pct_fmt
-                elif label in ratio_labels:
-                    cell.number_format = ratio_fmt
-                elif label in count_labels:
-                    cell.number_format = num_fmt
-
+    # Ajustements colonnes
     ws.freeze_panes = "B2"
-    ws.column_dimensions["A"].width = 34
-    for col_idx in range(2, len(headers) + 1):
-        ws.column_dimensions[get_column_letter(col_idx)].width = 16
+    ws.column_dimensions["A"].width = 40
+    for col in ["B", "C", "D"]:
+        ws.column_dimensions[col].width = 18
 
     output = BytesIO()
     wb.save(output)
