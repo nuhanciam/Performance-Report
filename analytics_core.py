@@ -981,3 +981,58 @@ def _apply_num_fmt(cell, val_type, is_roas, is_input, euro_fmt, pct_fmt, ratio_f
         cell.number_format = ratio_fmt
     elif val_type == "count":
         cell.number_format = count_fmt
+        
+def build_comparison_json(full_df: pd.DataFrame, month_m: str) -> str:
+    """
+    Génère une chaîne JSON contenant la comparaison entre le mois M 
+    et le mois M de l'année précédente.
+    """
+    def prev_year_month(m):
+        y, mo = int(m[:4]), int(m[5:])
+        return f"{y - 1}-{mo:02d}"
+
+    m1 = prev_year_month(month_m)
+    df_idx = full_df.set_index("Mois")
+    
+    # Récupération des lignes
+    row_m = df_idx.loc[month_m].to_dict() if month_m in df_idx.index else {}
+    row_m1 = df_idx.loc[m1].to_dict() if m1 in df_idx.index else {}
+    
+    comparison_data = {
+        "metadata": {
+            "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "current_month": month_m,
+            "comparison_month": m1
+        },
+        "metrics": {}
+    }
+
+    # On suit la structure COMPARISON_ROWS définie plus haut dans ton code
+    for entry in COMPARISON_ROWS:
+        section, label, sublabel, df_key, val_type = entry
+        
+        # On ignore les lignes de design (_BLANK_ ou titres de section)
+        if section == "_BLANK_" or (section and section.startswith("#")):
+            continue
+            
+        if df_key and val_type not in ("text", "input", None):
+            val_m = row_m.get(df_key)
+            val_m1 = row_m1.get(df_key)
+            
+            # Calcul du vs % (logique identique à ton Excel)
+            diff_pct = None
+            try:
+                if val_m is not None and val_m1:
+                    diff_pct = round((float(val_m) - float(val_m1)) / abs(float(val_m1)) * 100, 2)
+            except:
+                pass
+            
+            key_name = f"{label} {sublabel}".strip() if sublabel else label
+            comparison_data["metrics"][key_name] = {
+                "val_m": val_m,
+                "val_m1": val_m1,
+                "variation_pct": diff_pct,
+                "unit": val_type
+            }
+            
+    return json.dumps(comparison_data, indent=4, ensure_ascii=False)
