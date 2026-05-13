@@ -718,7 +718,7 @@ def _get(row, key):
     return row.get(key)
 
 
-def build_excel_comparison(full_df: "pd.DataFrame", month_m: str) -> bytes:
+def build_excel_comparison(full_df: "pd.DataFrame", month_m: str, months_to_compare=None) -> bytes:
     """
     Génère un Excel de comparaison cumulatif.
 
@@ -726,8 +726,9 @@ def build_excel_comparison(full_df: "pd.DataFrame", month_m: str) -> bytes:
     un bloc de 4 colonnes : [Mois M | Mois M-1 an | vs% | vide].
     Les colonnes fixes A et B (Indicateur / Sous-catégorie) restent à gauche.
 
-    full_df  : DataFrame cumulatif complet (une ligne par mois)
+    full_df  : DataFrame complet (une ligne par mois, incluant les mois de référence)
     month_m  : dernier mois ajouté (utilisé pour le titre de l'onglet)
+    months_to_compare : liste optionnelle des mois à afficher en blocs de comparaison
     """
     MONTH_FR = ["", "Jan", "Fév", "Mar", "Avr", "Mai", "Jun",
                 "Jul", "Aoû", "Sep", "Oct", "Nov", "Déc"]
@@ -740,8 +741,8 @@ def build_excel_comparison(full_df: "pd.DataFrame", month_m: str) -> bytes:
         y, mo = int(m[:4]), int(m[5:])
         return f"{y - 1}-{mo:02d}"
 
-    # Liste triée des mois présents dans l'historique
-    all_months = sorted(full_df["Mois"].tolist())
+    # Liste triée des mois à afficher en blocs de comparaison
+    all_months = sorted(months_to_compare or full_df["Mois"].tolist())
     df_idx     = full_df.set_index("Mois")
 
     def row_of(m):

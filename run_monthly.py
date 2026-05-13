@@ -76,6 +76,21 @@ def resolve_period():
     return date_from, date_to
 
 
+def month_bounds(year: int, month: int):
+    date_from = date(year, month, 1)
+    if month == 12:
+        date_to = date(year + 1, 1, 1) - timedelta(days=1)
+    else:
+        date_to = date(year, month + 1, 1) - timedelta(days=1)
+    return date_from, date_to
+
+
+def resolve_comparison_periods(reference_date_to: date):
+    current_from, current_to = month_bounds(reference_date_to.year, reference_date_to.month)
+    previous_from, previous_to = month_bounds(current_from.year - 1, current_from.month)
+    return (current_from, current_to), (previous_from, previous_to)
+
+
 def load_history(path: Path, label: str) -> pd.DataFrame:
     """Charge un historique depuis un JSON du dépôt."""
     if not path.exists():
@@ -158,6 +173,51 @@ def merge_cumul(existing: pd.DataFrame, new: pd.DataFrame) -> pd.DataFrame:
     return merged
 
 
+def fetch_metrics_for_period(
+    domain: str,
+    token: str,
+    ga4_property_id: str,
+    ga4_service_info: dict | None,
+    date_from: date,
+    date_to: date,
+    label: str,
+) -> pd.DataFrame:
+    """Récupère Shopify/GA4 puis calcule les métriques mensuelles pour une période."""
+    print(f"🛍️  Récupération des commandes Shopify ({label}) : {date_from} → {date_to}")
+    orders = get_all_orders(domain, token, date_from, date_to, log=print)
+
+    if not orders:
+        print(f"⚠️  Aucune commande trouvée pour {label}.")
+        return pd.DataFrame()
+
+    print(f"✅ {len(orders)} commandes récupérées pour {label}")
+
+    ga4_df_result = None
+    if ga4_property_id and ga4_service_info:
+        print(f"📈 Récupération des données GA4 ({label})...")
+        try:
+            ga4_df_result = get_ga4_monthly_metrics(
+                property_id=ga4_property_id,
+                service_account_info_dict=ga4_service_info,
+                date_from=date_from,
+                date_to=date_to,
+                log=print,
+            )
+            if ga4_df_result is not None and not ga4_df_result.empty:
+                print(f"✅ Données GA4 récupérées pour {label}")
+            else:
+                print(f"⚠️  Aucune donnée GA4 trouvée pour {label}")
+        except Exception as e:
+            print(f"⚠️  Erreur GA4 pour {label} (rapport généré sans) : {e}")
+    else:
+        print(f"ℹ️  GA4 non configuré pour {label}")
+
+    print(f"🔢 Calcul des métriques ({label})...")
+    return compute_monthly_metrics(
+        orders, ga4_df=ga4_df_result, date_from=date_from, date_to=date_to
+    )
+
+
 def send_email(
     excel_cumul_bytes: bytes,
     filename_cumul: str,
@@ -165,6 +225,7 @@ def send_email(
     filename_comp: str,
     new_month: str,
     total_months: int,
+    comparison_month: str | None = None,
 ):
     mail_from = os.environ["MAIL_FROM"]
     mail_password = os.environ["MAIL_PASSWORD"]
@@ -174,13 +235,14 @@ def send_email(
     msg["From"] = mail_from
     msg["To"] = ", ".join(recipients)
     msg["Subject"] = f"📊 Rapport Shopify Nuhanciam — {new_month} ({total_months} mois d'historique)"
+    comparison_month = comparison_month or new_month
 
     body = (
         f"Bonjour,\n\n"
         f"Le rapport mensuel a été mis à jour avec les données de {new_month}.\n\n"
         f"2 fichiers joints :\n"
         f"  • {filename_cumul} — historique complet ({total_months} mois, une colonne par mois)\n"
-        f"  • {filename_comp} — comparaison {new_month} vs même mois l'année précédente\n\n"
+        f"  • {filename_comp} — comparaison {comparison_month} vs même mois l'année précédente\n\n"
         f"Ce rapport est généré automatiquement chaque 1er du mois.\n\n"
         f"Bonne lecture !"
     )
@@ -211,6 +273,7 @@ def main():
     token = os.environ.get("SHOPIFY_TOKEN", "")
     ga4_property_id = os.environ.get("GA4_PROPERTY_ID", "")
     ga4_service_json_raw = os.environ.get("GA4_SERVICE_JSON", "")
+    ga4_service_info = None
 
     if not token:
         print("❌ SHOPIFY_TOKEN manquant.", file=sys.stderr)
@@ -220,45 +283,23 @@ def main():
         print("❌ Variables MAIL_FROM / MAIL_PASSWORD / MAIL_TO manquantes.", file=sys.stderr)
         sys.exit(1)
 
+    if ga4_property_id and ga4_service_json_raw:
+        try:
+            ga4_service_info = json.loads(ga4_service_json_raw)
+        except Exception as e:
+            print(f"⚠️  Erreur lecture GA4_SERVICE_JSON (rapports générés sans GA4) : {e}")
+
     date_from, date_to = resolve_period()
     print(f"📅 Période ce run : {date_from} → {date_to}")
 
-    # --- Shopify ---
-    print("🛍️  Récupération des commandes Shopify...")
-    orders = get_all_orders(domain, token, date_from, date_to, log=print)
-
-    if not orders:
-        print("Aucune commande trouvée sur cette période. Mail non envoyé.")
-        return
-
-    print(f"✅ {len(orders)} commandes récupérées")
-
-    # --- GA4 ---
-    ga4_df_result = None
-    if ga4_property_id and ga4_service_json_raw:
-        print("📈 Récupération des données GA4...")
-        try:
-            ga4_service_info = json.loads(ga4_service_json_raw)
-            ga4_df_result = get_ga4_monthly_metrics(
-                property_id=ga4_property_id,
-                service_account_info_dict=ga4_service_info,
-                date_from=date_from,
-                date_to=date_to,
-                log=print,
-            )
-            if ga4_df_result is not None and not ga4_df_result.empty:
-                print("✅ Données GA4 récupérées")
-            else:
-                print("⚠️  Aucune donnée GA4 trouvée")
-        except Exception as e:
-            print(f"⚠️  Erreur GA4 (rapport généré sans) : {e}")
-    else:
-        print("ℹ️  GA4 non configuré")
-
-    # --- Calcul nouvelles données ---
-    print("🔢 Calcul des métriques du mois...")
-    new_df = compute_monthly_metrics(
-        orders, ga4_df=ga4_df_result, date_from=date_from, date_to=date_to
+    new_df = fetch_metrics_for_period(
+        domain=domain,
+        token=token,
+        ga4_property_id=ga4_property_id,
+        ga4_service_info=ga4_service_info,
+        date_from=date_from,
+        date_to=date_to,
+        label="historique cumulatif",
     )
 
     if new_df.empty:
@@ -271,24 +312,65 @@ def main():
 
     # --- Sauvegarde historique ---
     save_cumul(full_df)
-    save_comparison_source(full_df)
 
     # --- Génération Excel cumulatif ---
     print(f"📄 Génération de l'Excel cumulatif ({len(full_df)} mois)...")
     excel_cumul_bytes = build_excel(full_df)
     filename_cumul = "analytics_nuhanciam_cumul.xlsx"
 
+    # --- Génération JSON comparaison depuis deux requêtes dédiées ---
+    (comp_current_from, comp_current_to), (comp_previous_from, comp_previous_to) = (
+        resolve_comparison_periods(date_to)
+    )
+    month_m = comp_current_from.strftime("%Y-%m")
+    month_m1 = comp_previous_from.strftime("%Y-%m")
+
+    comparison_current_df = fetch_metrics_for_period(
+        domain=domain,
+        token=token,
+        ga4_property_id=ga4_property_id,
+        ga4_service_info=ga4_service_info,
+        date_from=comp_current_from,
+        date_to=comp_current_to,
+        label=f"comparaison {month_m}",
+    )
+    if comparison_current_df.empty and "Mois" in new_df.columns:
+        comparison_current_df = new_df[new_df["Mois"] == month_m].copy()
+
+    comparison_previous_df = fetch_metrics_for_period(
+        domain=domain,
+        token=token,
+        ga4_property_id=ga4_property_id,
+        ga4_service_info=ga4_service_info,
+        date_from=comp_previous_from,
+        date_to=comp_previous_to,
+        label=f"comparaison {month_m1}",
+    )
+
+    comparison_df = pd.concat(
+        [comparison_previous_df, comparison_current_df],
+        ignore_index=True,
+    )
+    if not comparison_df.empty and "Mois" in comparison_df.columns:
+        comparison_df = (
+            comparison_df.drop_duplicates(subset=["Mois"], keep="last")
+            .sort_values("Mois")
+            .reset_index(drop=True)
+        )
+    save_comparison_source(comparison_df)
+
     # --- Génération Excel comparaison depuis son JSON dédié ---
     comparison_df = load_comparison_source()
     if comparison_df.empty:
-        print("⚠️  JSON de comparaison vide après sauvegarde — fallback sur le cumulatif en mémoire.")
-        comparison_df = full_df
+        print("⚠️  JSON de comparaison vide après sauvegarde — fallback sur les mois disponibles dans le cumulatif.")
+        comparison_df = full_df[full_df["Mois"].isin([month_m1, month_m])].copy()
 
     # --- Génération Excel comparaison (Mois M vs même mois année précédente) ---
-    month_m = sorted(new_df["Mois"].tolist())[-1]  # dernier mois du run
     print(f"📊 Génération de l'Excel comparaison pour {month_m}...")
     try:
-        excel_comp_bytes = build_excel_comparison(comparison_df, month_m)
+        excel_comp_bytes = build_excel_comparison(
+            comparison_df, month_m, months_to_compare=[month_m]
+        )
         filename_comp = f"analytics_nuhanciam_comparaison_{month_m}.xlsx"
     except Exception as e:
         print(f"⚠️  Erreur génération comparaison : {e} — seul le cumulatif sera envoyé.")
@@ -301,6 +383,7 @@ def main():
         excel_cumul_bytes, filename_cumul,
         excel_comp_bytes, filename_comp,
         new_months_label, len(full_df),
+        comparison_month=month_m,
     )
 
 
