@@ -85,10 +85,31 @@ def month_bounds(year: int, month: int):
     return date_from, date_to
 
 
-def resolve_comparison_periods(reference_date_to: date):
-    current_from, current_to = month_bounds(reference_date_to.year, reference_date_to.month)
-    previous_from, previous_to = month_bounds(current_from.year - 1, current_from.month)
-    return (current_from, current_to), (previous_from, previous_to)
+def resolve_comparison_periods(current_date_from: date, current_date_to: date):
+    previous_from, _ = month_bounds(current_date_from.year - 1, current_date_from.month)
+    _, previous_to = month_bounds(current_date_to.year - 1, current_date_to.month)
+    return (current_date_from, current_date_to), (previous_from, previous_to)
+
+
+def prev_year_month(month_key: str) -> str:
+    year, month = int(month_key[:4]), int(month_key[5:])
+    return f"{year - 1}-{month:02d}"
+
+
+def format_month_range(months: list[str]) -> str:
+    if not months:
+        return ""
+    if len(months) == 1:
+        return months[0]
+    return f"{months[0]} à {months[-1]}"
+
+
+def format_month_range_filename(months: list[str]) -> str:
+    if not months:
+        return "periode"
+    if len(months) == 1:
+        return months[0]
+    return f"{months[0]}_a_{months[-1]}"
 
 
 def load_history(path: Path, label: str) -> pd.DataFrame:
@@ -320,10 +341,13 @@ def main():
 
     # --- Génération JSON comparaison depuis deux requêtes dédiées ---
     (comp_current_from, comp_current_to), (comp_previous_from, comp_previous_to) = (
-        resolve_comparison_periods(date_to)
+        resolve_comparison_periods(date_from, date_to)
     )
-    month_m = comp_current_from.strftime("%Y-%m")
-    month_m1 = comp_previous_from.strftime("%Y-%m")
+    comparison_months = sorted(new_df["Mois"].tolist())
+    previous_comparison_months = [prev_year_month(month) for month in comparison_months]
+    comparison_label = format_month_range(comparison_months)
+    comparison_filename_label = format_month_range_filename(comparison_months)
+    latest_comparison_month = comparison_months[-1]
 
     comparison_current_df = fetch_metrics_for_period(
         domain=domain,
@@ -332,10 +356,10 @@ def main():
         ga4_service_info=ga4_service_info,
         date_from=comp_current_from,
         date_to=comp_current_to,
-        label=f"comparaison {month_m}",
+        label=f"comparaison {comparison_label}",
     )
     if comparison_current_df.empty and "Mois" in new_df.columns:
-        comparison_current_df = new_df[new_df["Mois"] == month_m].copy()
+        comparison_current_df = new_df[new_df["Mois"].isin(comparison_months)].copy()
 
     comparison_previous_df = fetch_metrics_for_period(
         domain=domain,
@@ -344,7 +368,7 @@ def main():
         ga4_service_info=ga4_service_info,
         date_from=comp_previous_from,
         date_to=comp_previous_to,
-        label=f"comparaison {month_m1}",
+        label=f"comparaison {format_month_range(previous_comparison_months)}",
     )
 
     comparison_df = pd.concat(
@@ -363,15 +387,19 @@ def main():
     comparison_df = load_comparison_source()
     if comparison_df.empty:
         print("⚠️  JSON de comparaison vide après sauvegarde — fallback sur les mois disponibles dans le cumulatif.")
-        comparison_df = full_df[full_df["Mois"].isin([month_m1, month_m])].copy()
+        comparison_df = full_df[
+            full_df["Mois"].isin(previous_comparison_months + comparison_months)
+        ].copy()
 
     # --- Génération Excel comparaison (Mois M vs même mois année précédente) ---
-    print(f"📊 Génération de l'Excel comparaison pour {month_m}...")
+    print(f"📊 Génération de l'Excel comparaison pour {comparison_label}...")
     try:
         excel_comp_bytes = build_excel_comparison(
-            comparison_df, month_m, months_to_compare=[month_m]
+            comparison_df,
+            latest_comparison_month,
+            months_to_compare=comparison_months,
         )
-        filename_comp = f"analytics_nuhanciam_comparaison_{month_m}.xlsx"
+        filename_comp = f"analytics_nuhanciam_comparaison_{comparison_filename_label}.xlsx"
     except Exception as e:
         print(f"⚠️  Erreur génération comparaison : {e} — seul le cumulatif sera envoyé.")
         excel_comp_bytes = excel_cumul_bytes
@@ -383,7 +411,7 @@ def main():
         excel_cumul_bytes, filename_cumul,
         excel_comp_bytes, filename_comp,
         new_months_label, len(full_df),
-        comparison_month=month_m,
+        comparison_month=comparison_label,
     )
 
 

@@ -63,7 +63,7 @@ Va dans ton dépôt → **Settings → Secrets and variables → Actions → New
 ## 4. Comportement du workflow
 
 - **Automatique** : se lance le **1er de chaque mois à 7h00 (heure Paris)** et envoie le rapport du mois précédent.
-- Le workflow maintient deux JSON : `data/rapport_cumul.json` pour l'Excel cumulatif et `data/rapport_comparaison.json` pour l'Excel de comparaison. Le fichier comparaison est recalculé avec deux requêtes dédiées : le dernier mois complet et le même mois un an avant.
+- Le workflow maintient deux JSON : `data/rapport_cumul.json` pour l'Excel cumulatif et `data/rapport_comparaison.json` pour l'Excel de comparaison. Le fichier comparaison est recalculé avec deux requêtes dédiées : la période demandée (`REPORT_MONTHS`) et la même période un an avant.
 - **Manuel** : tu peux le déclencher à tout moment depuis l'onglet **Actions** de GitHub → bouton "Run workflow". Tu peux choisir combien de mois couvrir (ex: 12 pour toute l'année).
 
 ---
