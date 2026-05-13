@@ -642,9 +642,9 @@ COMPARISON_ROWS = [
     ("#5 GEO", None, None, None, None),
     (None, "Net Sales",              None, "Net Sales (€)",            "euro"),
     (None, "Net Sales FR €",         None, "France (€)",               "euro"),
-    (None, "Net Sales FR %",         None, None,                       None),   # calculé à la volée
+    (None, "Net Sales FR %",         None, "_net_sales_fr_pct_",       "pct"),
     (None, "Net Sales Export €",     None, "Export (€)",               "euro"),
-    (None, "Net Sales Export %",     None, None,                       None),   # calculé à la volée
+    (None, "Net Sales Export %",     None, "_net_sales_export_pct_",   "pct"),
     ("_BLANK_", None, None, None, None),
     (None, "Top 3 CA pays hors France", None, None,                   None),
     (None, "#1",                     None, "Export #1",                "text"),
@@ -700,24 +700,31 @@ def build_excel_comparison(full_df: "pd.DataFrame", month_m: str) -> bytes:
     row_m  = df_idx.loc[month_m].to_dict()  if month_m  in df_idx.index else None
     row_m1 = df_idx.loc[month_m1].to_dict() if month_m1 in df_idx.index else None
 
-    # Calcul des % geo à la volée
+    def _clean(v):
+        """Convertit string vide en None, tente float sinon garde tel quel."""
+        if v is None or v == "":
+            return None
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return v
+
     def geo_pct(row, num_key, denom_key):
         if row is None:
             return None
         try:
-            num = float(row.get(num_key) or 0)
+            num   = float(row.get(num_key)   or 0)
             denom = float(row.get(denom_key) or 0)
             return round(num / denom * 100, 1) if denom else None
         except Exception:
             return None
 
-    # Surcharge pour les clés calculées à la volée
     def get_value(row, key):
-        if key == "Net Sales FR %":
+        if key == "_net_sales_fr_pct_":
             return geo_pct(row, "France (€)", "Net Sales (€)")
-        if key == "Net Sales Export %":
+        if key == "_net_sales_export_pct_":
             return geo_pct(row, "Export (€)", "Net Sales (€)")
-        return _get(row, key)
+        return _clean(_get(row, key))
 
     # ---- Construction du workbook ----
     wb = Workbook()
@@ -788,32 +795,54 @@ def build_excel_comparison(full_df: "pd.DataFrame", month_m: str) -> bytes:
             continue
 
         # Ligne de données
-        val_m  = get_value(row_m,  df_key) if df_key else None
-        val_m1 = get_value(row_m1, df_key) if df_key else None
-
-        # Gestion de la ligne "Budget Ads" (input manuel)
         is_input = val_type == "input"
         is_roas  = df_key == "_roas_"
+        is_subcategory = (label == "")  # ligne de sous-catégorie (Organic, Direct…)
 
         if is_input:
-            val_m  = None  # placeholder, l'utilisateur remplit
-            val_m1 = None
-        if is_roas:
-            val_m  = None
-            val_m1 = None
+            # Budget Ads : placeholder 5000 par défaut, surlignée jaune pour saisie
+            val_m  = 5000
+            val_m1 = 5000
+        elif is_roas:
+            # ROAS = Net Sales / Budget Ads (5000 par défaut si pas de budget saisi)
+            budget = 5000
+            ns_m  = _clean(_get(row_m,  "Net Sales (€)"))
+            ns_m1 = _clean(_get(row_m1, "Net Sales (€)"))
+            val_m  = round(float(ns_m)  / budget, 2) if ns_m  else None
+            val_m1 = round(float(ns_m1) / budget, 2) if ns_m1 else None
+        else:
+            val_m  = get_value(row_m,  df_key) if df_key else None
+            val_m1 = get_value(row_m1, df_key) if df_key else None
 
+        # vs % uniquement si les deux valeurs sont numériques et pas input/roas
         vs = None
-        if not is_input and not is_roas and val_type not in ("text", None):
+        if not is_input and val_type not in ("text", None) and df_key:
             vs = _vs_pct(val_m, val_m1)
 
-        fill = fill_input if is_input else (fill_stripe if stripe else None)
+        # Couleur de fond
+        if is_input:
+            fill = fill_input
+        elif is_subcategory:
+            fill = fill_stripe if stripe else None  # légèrement grisé pour distinguer
+        else:
+            fill = fill_stripe if stripe else None
 
-        values = [label or "", sublabel or "", val_m, val_m1, vs]
+        # Colonne A = label principal, Colonne B = sous-catégorie
+        col_a = label if label is not None else ""
+        col_b = sublabel if sublabel is not None else ""
+
+        values = [col_a, col_b, val_m, val_m1, vs]
 
         for col_idx, value in enumerate(values, start=1):
             cell = ws.cell(row=excel_row, column=col_idx, value=value)
             cell.border = border_normal
-            cell.font = font_bold if col_idx == 1 else font_normal
+
+            # Police : gras col A sauf si sous-catégorie (label vide → italique col B)
+            if is_subcategory:
+                cell.font = Font(name="Arial", size=10, italic=(col_idx == 2))
+            else:
+                cell.font = font_bold if col_idx == 1 else font_normal
+
             cell.alignment = Alignment(
                 horizontal="left" if col_idx <= 2 else "right",
                 vertical="center",
@@ -821,14 +850,14 @@ def build_excel_comparison(full_df: "pd.DataFrame", month_m: str) -> bytes:
             if fill:
                 cell.fill = fill
 
-            # Format numérique
+            # Format numérique colonnes Mois M et Mois M-1 an
             if col_idx in (3, 4) and val_type:
-                if val_type == "euro":
+                if val_type in ("input", "ratio") or is_roas:
+                    cell.number_format = ratio_fmt
+                elif val_type == "euro":
                     cell.number_format = euro_fmt
                 elif val_type == "pct":
                     cell.number_format = pct_fmt
-                elif val_type == "ratio":
-                    cell.number_format = ratio_fmt
                 elif val_type == "count":
                     cell.number_format = count_fmt
 
