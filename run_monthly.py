@@ -36,6 +36,7 @@ import pandas as pd
 
 from analytics_core import (
     build_excel,
+    build_excel_comparison,
     compute_monthly_metrics,
     get_all_orders,
     get_ga4_monthly_metrics,
@@ -111,7 +112,14 @@ def merge_cumul(existing: pd.DataFrame, new: pd.DataFrame) -> pd.DataFrame:
     return merged
 
 
-def send_email(excel_bytes: bytes, filename: str, new_month: str, total_months: int):
+def send_email(
+    excel_cumul_bytes: bytes,
+    filename_cumul: str,
+    excel_comp_bytes: bytes,
+    filename_comp: str,
+    new_month: str,
+    total_months: int,
+):
     mail_from = os.environ["MAIL_FROM"]
     mail_password = os.environ["MAIL_PASSWORD"]
     recipients = [r.strip() for r in os.environ["MAIL_TO"].split(",") if r.strip()]
@@ -119,20 +127,26 @@ def send_email(excel_bytes: bytes, filename: str, new_month: str, total_months: 
     msg = MIMEMultipart()
     msg["From"] = mail_from
     msg["To"] = ", ".join(recipients)
-    msg["Subject"] = f"📊 Rapport Shopify Nuhanciam — {new_month} ajouté ({total_months} mois au total)"
+    msg["Subject"] = f"📊 Rapport Shopify Nuhanciam — {new_month} ({total_months} mois d'historique)"
 
     body = (
         f"Bonjour,\n\n"
-        f"Le rapport mensuel a été mis à jour avec les données de {new_month}.\n"
-        f"Le fichier joint contient désormais {total_months} mois d'historique.\n\n"
+        f"Le rapport mensuel a été mis à jour avec les données de {new_month}.\n\n"
+        f"2 fichiers joints :\n"
+        f"  • {filename_cumul} — historique complet ({total_months} mois, une colonne par mois)\n"
+        f"  • {filename_comp} — comparaison {new_month} vs même mois l'année précédente\n\n"
         f"Ce rapport est généré automatiquement chaque 1er du mois.\n\n"
         f"Bonne lecture !"
     )
     msg.attach(MIMEText(body, "plain", "utf-8"))
 
-    attachment = MIMEApplication(excel_bytes, _subtype="xlsx")
-    attachment.add_header("Content-Disposition", "attachment", filename=filename)
-    msg.attach(attachment)
+    for excel_bytes, filename in [
+        (excel_cumul_bytes, filename_cumul),
+        (excel_comp_bytes, filename_comp),
+    ]:
+        attachment = MIMEApplication(excel_bytes, _subtype="xlsx")
+        attachment.add_header("Content-Disposition", "attachment", filename=filename)
+        msg.attach(attachment)
 
     smtp_host = os.environ.get("SMTP_HOST", "smtp.gmail.com")
     smtp_port = int(os.environ.get("SMTP_PORT", "587"))
@@ -213,13 +227,28 @@ def main():
     save_cumul(full_df)
 
     # --- Génération Excel cumulatif ---
-    print(f"📄 Génération de l'Excel ({len(full_df)} mois)...")
-    excel_bytes = build_excel(full_df)
-    filename = "analytics_nuhanciam_cumul.xlsx"
+    print(f"📄 Génération de l'Excel cumulatif ({len(full_df)} mois)...")
+    excel_cumul_bytes = build_excel(full_df)
+    filename_cumul = "analytics_nuhanciam_cumul.xlsx"
+
+    # --- Génération Excel comparaison (Mois M vs même mois année précédente) ---
+    month_m = sorted(new_df["Mois"].tolist())[-1]  # dernier mois du run
+    print(f"📊 Génération de l'Excel comparaison pour {month_m}...")
+    try:
+        excel_comp_bytes = build_excel_comparison(full_df, month_m)
+        filename_comp = f"analytics_nuhanciam_comparaison_{month_m}.xlsx"
+    except Exception as e:
+        print(f"⚠️  Erreur génération comparaison : {e} — seul le cumulatif sera envoyé.")
+        excel_comp_bytes = excel_cumul_bytes
+        filename_comp = filename_cumul
 
     # --- Mail ---
     new_months_label = ", ".join(sorted(new_df["Mois"].tolist()))
-    send_email(excel_bytes, filename, new_months_label, len(full_df))
+    send_email(
+        excel_cumul_bytes, filename_cumul,
+        excel_comp_bytes, filename_comp,
+        new_months_label, len(full_df),
+    )
 
 
 if __name__ == "__main__":

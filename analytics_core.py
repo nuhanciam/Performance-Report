@@ -576,3 +576,272 @@ def build_excel(df):
     output = BytesIO()
     wb.save(output)
     return output.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# Rapport de comparaison : Mois M vs Mois M-1 an (même mois année précédente)
+# ---------------------------------------------------------------------------
+
+# (label affiché, clé dans le df, sous-label optionnel, type de valeur)
+# type : "euro" | "pct" | "ratio" | "count" | "text" | "input" | None
+COMPARISON_ROWS = [
+    # section, label, sous-label, clé_df, type
+    ("#1 ACQUISITION", None, None, None, None),
+    (None, "Visiteurs uniques",      None, "unique_visitors",          "count"),
+    (None, "Nouveaux visiteurs",     None, None,                       None),   # non dispo Shopify
+    (None, "Sources acquisition",    "Organic",    None,               None),
+    (None, "",                       "Direct",     None,               None),
+    (None, "",                       "Paid",       None,               None),
+    (None, "",                       "Email",      None,               None),
+    (None, "",                       "Social",     None,               None),
+    (None, "",                       "Referral",   None,               None),
+    (None, "",                       "Unassigned", None,               None),
+    (None, "Duration min",           None, "duration_minutes",         "ratio"),
+    (None, "Bounce %",               None, "bounce_pct",               "pct"),
+    ("_BLANK_", None, None, None, None),
+    (None, "Budget Ads",             None, "_budget_ads_",             "input"),
+    (None, "ROAS",                   None, "_roas_",                   "ratio"),
+    ("_BLANK_", None, None, None, None),
+
+    ("#2 CONVERSION", None, None, None, None),
+    (None, "Add to cart",            None, "add_to_cart",              "count"),
+    (None, "Checkout",               None, "checkout",                 "count"),
+    (None, "Commandes",              None, "# Commandes",              "count"),
+    (None, "Tx conversion",          None, "conversion_pct",           "pct"),
+    (None, "Commandes Nx clients",   None, "# Nouveaux clients",       "count"),
+    (None, "% cdes Nx clients",      None, "% cdes Nx clients",        "pct"),
+    ("_BLANK_", None, None, None, None),
+
+    ("#3 PERFORMANCE CA", None, None, None, None),
+    (None, "Gross sales",            None, "Gross Sales (€)",          "euro"),
+    (None, "Discounts",              None, "Discounts (€)",            "euro"),
+    (None, "Discounts %",            None, "Discounts %",              "pct"),
+    ("_BLANK_", None, None, None, None),
+    (None, "Net Sales",              None, "Net Sales (€)",            "euro"),
+    (None, "Shipping",               None, "Shipping (€)",             "euro"),
+    (None, "Taxes",                  None, "Taxes (€)",                "euro"),
+    (None, "TOTAL SALES",            None, "Total Sales (€)",          "euro"),
+    ("_BLANK_", None, None, None, None),
+    (None, "Panier moyen HT",        None, "AOV HT (€)",               "euro"),
+    (None, "Panier moyen TTC + ship",None, "AOV TTC incl. ship (€)",   "euro"),
+    ("_BLANK_", None, None, None, None),
+    (None, "Retours €",              None, "Retours (€)",              "euro"),
+    (None, "Retours #",              None, "Retours (#)",              "count"),
+    (None, "Retours %",              None, "Retours %",                "pct"),
+    (None, "Net sales - retour",     None, "Net Sales après retours (€)", "euro"),
+    ("_BLANK_", None, None, None, None),
+
+    ("#4 PERFORMANCE PRODUITS", None, None, None, None),
+    (None, "# Produits vendus",      None, "# Produits vendus",        "count"),
+    (None, "Ratio cdes/clients",     None, "Ratio cdes/clients",       "ratio"),
+    (None, "Ratio produit / cde",    None, "Ratio produit/cde",        "ratio"),
+    ("_BLANK_", None, None, None, None),
+    (None, "Top 10 produits Volume", None, None,                       None),
+    ("_BLANK_", None, None, None, None),
+
+    ("#5 GEO", None, None, None, None),
+    (None, "Net Sales",              None, "Net Sales (€)",            "euro"),
+    (None, "Net Sales FR €",         None, "France (€)",               "euro"),
+    (None, "Net Sales FR %",         None, None,                       None),   # calculé à la volée
+    (None, "Net Sales Export €",     None, "Export (€)",               "euro"),
+    (None, "Net Sales Export %",     None, None,                       None),   # calculé à la volée
+    ("_BLANK_", None, None, None, None),
+    (None, "Top 3 CA pays hors France", None, None,                   None),
+    (None, "#1",                     None, "Export #1",                "text"),
+    (None, "#2",                     None, "Export #2",                "text"),
+    (None, "#3",                     None, "Export #3",                "text"),
+]
+
+
+def _vs_pct(m, m1):
+    """Calcule le % de variation entre m (Mois M) et m1 (Mois M-1 an)."""
+    try:
+        m = float(m)
+        m1 = float(m1)
+        if m1 == 0:
+            return None
+        return round((m - m1) / abs(m1) * 100, 1)
+    except (TypeError, ValueError):
+        return None
+
+
+def _get(row, key):
+    """Retourne la valeur d'une clé dans un dict de métriques, ou None."""
+    if row is None or key is None:
+        return None
+    return row.get(key)
+
+
+def build_excel_comparison(full_df: "pd.DataFrame", month_m: str) -> bytes:
+    """
+    Génère un Excel de comparaison Mois M vs même mois année précédente (Mois M-1 an).
+
+    full_df : DataFrame cumulatif (une ligne par mois)
+    month_m : clé du mois courant au format "YYYY-MM" (ex: "2025-04")
+
+    Retourne les bytes du fichier Excel.
+    """
+    import calendar
+
+    # Calcul du mois M-1 an (même mois, année précédente)
+    year_m, mon_m = int(month_m[:4]), int(month_m[5:])
+    month_m1 = f"{year_m - 1}-{mon_m:02d}"
+
+    # Noms d'affichage lisibles
+    MONTH_FR = [
+        "", "Jan", "Fév", "Mar", "Avr", "Mai", "Jun",
+        "Jul", "Aoû", "Sep", "Oct", "Nov", "Déc"
+    ]
+    label_m  = f"{MONTH_FR[mon_m]} {year_m}"
+    label_m1 = f"{MONTH_FR[mon_m]} {year_m - 1}"
+
+    # Récupère les lignes correspondantes
+    df_idx = full_df.set_index("Mois")
+    row_m  = df_idx.loc[month_m].to_dict()  if month_m  in df_idx.index else None
+    row_m1 = df_idx.loc[month_m1].to_dict() if month_m1 in df_idx.index else None
+
+    # Calcul des % geo à la volée
+    def geo_pct(row, num_key, denom_key):
+        if row is None:
+            return None
+        try:
+            num = float(row.get(num_key) or 0)
+            denom = float(row.get(denom_key) or 0)
+            return round(num / denom * 100, 1) if denom else None
+        except Exception:
+            return None
+
+    # Surcharge pour les clés calculées à la volée
+    def get_value(row, key):
+        if key == "Net Sales FR %":
+            return geo_pct(row, "France (€)", "Net Sales (€)")
+        if key == "Net Sales Export %":
+            return geo_pct(row, "Export (€)", "Net Sales (€)")
+        return _get(row, key)
+
+    # ---- Construction du workbook ----
+    wb = Workbook()
+    ws = wb.active
+    ws.title = f"Comparaison {label_m}"
+
+    # Styles
+    font_white_bold = Font(name="Arial", bold=True, color="FFFFFF", size=10)
+    font_normal     = Font(name="Arial", size=10)
+    font_bold       = Font(name="Arial", bold=True, size=10)
+    font_section    = Font(name="Arial", bold=True, color="FFFFFF", size=10)
+    font_pos        = Font(name="Arial", size=10, color="217346")   # vert foncé
+    font_neg        = Font(name="Arial", size=10, color="C00000")   # rouge
+
+    fill_header  = PatternFill("solid", fgColor="1F4E79")
+    fill_section = PatternFill("solid", fgColor="F4B942")  # jaune/orange comme la maquette
+    fill_stripe  = PatternFill("solid", fgColor="F2F2F2")
+    fill_input   = PatternFill("solid", fgColor="FFFF99")  # jaune clair = saisie manuelle
+
+    thin  = Side(style="thin",   color="CCCCCC")
+    thick = Side(style="medium", color="888888")
+    border_normal  = Border(left=thin,  right=thin,  top=thin,  bottom=thin)
+    border_section = Border(left=thick, right=thick, top=thick, bottom=thick)
+
+    euro_fmt  = '#,##0.00 "€"'
+    pct_fmt   = '0.0"%"'
+    ratio_fmt = '0.00'
+    count_fmt = '#,##0'
+    vs_fmt    = '+0.0"%";-0.0"%";0.0"%"'   # affiche le signe + ou -
+
+    # En-têtes
+    headers = ["Indicateur", "Sous-catégorie", label_m, label_m1, "vs %"]
+    col_widths = [28, 16, 16, 16, 10]
+
+    for col_idx, (header, width) in enumerate(zip(headers, col_widths), start=1):
+        cell = ws.cell(row=1, column=col_idx, value=header)
+        cell.font = font_white_bold
+        cell.fill = fill_header
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        cell.border = border_normal
+        ws.column_dimensions[get_column_letter(col_idx)].width = width
+
+    ws.row_dimensions[1].height = 22
+
+    excel_row = 2
+    stripe = False
+
+    for entry in COMPARISON_ROWS:
+        section, label, sublabel, df_key, val_type = entry
+
+        # Ligne vide
+        if section == "_BLANK_":
+            excel_row += 1
+            stripe = not stripe
+            continue
+
+        # Ligne de section (titre #1 ACQUISITION etc.)
+        if section and section.startswith("#"):
+            for col_idx in range(1, 6):
+                cell = ws.cell(row=excel_row, column=col_idx, value=section if col_idx == 1 else "")
+                cell.font = font_section
+                cell.fill = fill_section
+                cell.border = border_section
+                cell.alignment = Alignment(horizontal="left", vertical="center")
+            ws.row_dimensions[excel_row].height = 18
+            excel_row += 1
+            stripe = False
+            continue
+
+        # Ligne de données
+        val_m  = get_value(row_m,  df_key) if df_key else None
+        val_m1 = get_value(row_m1, df_key) if df_key else None
+
+        # Gestion de la ligne "Budget Ads" (input manuel)
+        is_input = val_type == "input"
+        is_roas  = df_key == "_roas_"
+
+        if is_input:
+            val_m  = None  # placeholder, l'utilisateur remplit
+            val_m1 = None
+        if is_roas:
+            val_m  = None
+            val_m1 = None
+
+        vs = None
+        if not is_input and not is_roas and val_type not in ("text", None):
+            vs = _vs_pct(val_m, val_m1)
+
+        fill = fill_input if is_input else (fill_stripe if stripe else None)
+
+        values = [label or "", sublabel or "", val_m, val_m1, vs]
+
+        for col_idx, value in enumerate(values, start=1):
+            cell = ws.cell(row=excel_row, column=col_idx, value=value)
+            cell.border = border_normal
+            cell.font = font_bold if col_idx == 1 else font_normal
+            cell.alignment = Alignment(
+                horizontal="left" if col_idx <= 2 else "right",
+                vertical="center",
+            )
+            if fill:
+                cell.fill = fill
+
+            # Format numérique
+            if col_idx in (3, 4) and val_type:
+                if val_type == "euro":
+                    cell.number_format = euro_fmt
+                elif val_type == "pct":
+                    cell.number_format = pct_fmt
+                elif val_type == "ratio":
+                    cell.number_format = ratio_fmt
+                elif val_type == "count":
+                    cell.number_format = count_fmt
+
+            # Colonne vs %
+            if col_idx == 5 and vs is not None:
+                cell.number_format = vs_fmt
+                cell.font = font_pos if vs >= 0 else font_neg
+
+        excel_row += 1
+        stripe = not stripe
+
+    ws.freeze_panes = "C2"
+
+    output = BytesIO()
+    wb.save(output)
+    return output.getvalue()
