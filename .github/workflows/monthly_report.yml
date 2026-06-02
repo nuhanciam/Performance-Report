@@ -3,7 +3,7 @@ name: Rapport mensuel Shopify
 on:
   # Tourne le 1er de chaque mois à 7h00 (heure Paris = UTC+1/+2)
   schedule:
-    - cron: "0 10 1 * *"   # 6h UTC = 7h Paris hiver / 8h Paris été
+    - cron: "0 6 1 * *"   # 6h UTC = 7h Paris hiver / 8h Paris été
 
   # Permet de lancer manuellement depuis l'onglet Actions de GitHub
   workflow_dispatch:
