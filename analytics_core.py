@@ -477,7 +477,7 @@ def compute_monthly_metrics(orders, ga4_df=None, date_from=None, date_to=None):
         top5 = sorted(product_qty.values(), key=lambda x: x["revenue"], reverse=True)[:5]
         top10_volume = sorted(
             product_qty.values(),
-            key=lambda x: (x["qty"], x["revenue"]),
+            key=lambda x: x["revenue"],
             reverse=True,
         )[:10]
 
@@ -546,7 +546,7 @@ def compute_monthly_metrics(orders, ga4_df=None, date_from=None, date_to=None):
             "Top Pdct #5 CA (€)": round(top5[4]["revenue"], 2) if len(top5) > 4 else 0,
             **{
                 f"Top Volume #{i}": (
-                    f'{top10_volume[i - 1]["title"]} - {top10_volume[i - 1]["qty"]} u'
+                    f'{top10_volume[i - 1]["title"]} - {top10_volume[i - 1]["qty"]} u - {round(top10_volume[i - 1]["revenue"], 2)} €'
                     if len(top10_volume) >= i else ""
                 )
                 for i in range(1, 11)
