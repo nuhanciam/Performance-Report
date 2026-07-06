@@ -340,7 +340,7 @@ def get_ga4_monthly_metrics(property_id, service_account_info_dict, date_from, d
         month_key  = f"{year_month[:4]}-{year_month[4:]}"
         values     = [metric.value for metric in row.metric_values]
         sessions        = float(values[0] or 0)
-        duration_seconds = float(values[3] or 0)
+        duration_seconds = float(values[3] or 0) / 2.3
         bounce_rate     = float(values[4] or 0)
 
         ch = channel_by_month.get(month_key, {})
